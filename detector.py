@@ -1,7 +1,9 @@
 import argparse
 import pickle
+import numpy as np
 from collections import Counter
 from pathlib import Path
+from sklearn.svm import SVC
 
 import face_recognition
 from PIL import Image, ImageDraw
@@ -14,6 +16,7 @@ TEXT_COLOR = "white"
 Path("training").mkdir(exist_ok=True)
 Path("output").mkdir(exist_ok=True)
 Path("validation").mkdir(exist_ok=True)
+Path("testing").mkdir(exist_ok=True)
 
 parser = argparse.ArgumentParser(description="Recognize faces in an image")
 parser.add_argument("--train", action="store_true", help="Train on input data")
@@ -29,9 +32,6 @@ parser.add_argument(
     default="hog",
     choices=["hog", "cnn"],
     help="Which model to use for training: hog (CPU), cnn (GPU)",
-)
-parser.add_argument(
-    "-f", action="store", help="Path to an image with an unknown face"
 )
 args = parser.parse_args()
 
@@ -90,22 +90,35 @@ def recognize_faces(
     for bounding_box, unknown_encoding in zip(
         input_face_locations, input_face_encodings
     ):
-        name = _recognize_face(unknown_encoding, loaded_encodings)
+        # name = _recognize_face(unknown_encoding, loaded_encodings)
+        name = knn_recognize_face(unknown_encoding, loaded_encodings)
         if not name:
             name = "Unknown"
         _display_face(draw, bounding_box, name)
-
+        break
     del draw
     pillow_image.show()
     return name
 
+def face_distance(face_encodings, face_to_compare):
+    if len(face_encodings) == 0:
+        return np.empty((0))
+    return np.linalg.norm(face_encodings - face_to_compare, axis=1)
+
+def knn_recognize_face(unknown_encoding, loaded_encodings):
+    distances = face_distance(loaded_encodings["encodings"], unknown_encoding)
+    index = np.argmin(distances)
+    return loaded_encodings["names"][index]
+
+def compare_faces(known_face_encodings, face_encoding_to_check, tolerance=0.6):
+    return list(face_distance(known_face_encodings, face_encoding_to_check) <= tolerance)
 
 def _recognize_face(unknown_encoding, loaded_encodings):
     """
     Given an unknown encoding and all known encodings, find the known
     encoding with the most matches.
     """
-    boolean_matches = face_recognition.compare_faces(
+    boolean_matches = compare_faces(
         loaded_encodings["encodings"], unknown_encoding, 0.4
     )
     votes = Counter(
@@ -138,28 +151,27 @@ def _display_face(draw, bounding_box, name):
     )
 
 
-def validate(model: str = "hog"):
+def validate_test(model, imagePath):
     """
     Runs recognize_faces on a set of images with known faces to validate
     known encodings.
     """
     totalNum = 0
     correctNum = 0
-    for filepath in Path("validation").rglob("*"):
+    for filepath in Path(imagePath).glob("*/*"):
         if filepath.is_file():
             totalNum += 1
             name = recognize_faces(
                 image_location=str(filepath.absolute()), model=model
             )
-            if (name == filepath.name.split("-")[0]):
+            if (name == filepath.parent.name):
                 correctNum += 1
     print("Accuracy:", correctNum / totalNum)
-
 
 if __name__ == "__main__":
     if args.train:
         encode_known_faces(model=args.m)
     if args.validate:
-        validate(model=args.m)
+        validate_test(args.m, "validation")
     if args.test:
-        recognize_faces(image_location=args.f, model=args.m)
+        validate_test(args.m, "testing")
